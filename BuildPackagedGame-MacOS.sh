@@ -10,8 +10,8 @@ if [[ ($# -ne 1) ]]; then
 	echo "./BuildPackagedGame-MacOS.sh <project-name>"
 else
 
-	if [ -f python ]; then
-		./PackageGame.py PWD/$1.uproject PWD/Content/$1/Maps/Levels/
+	if command -v python3 >/dev/null 2>&1; then
+		./PackageGame.py "$PWD/$1.uproject" "$PWD/Content/$1/Maps/Levels/"
 
 	else
 		echo "Python not installed on this machine. Please visit https://www.python.org/downloads/macos/ and download the latests Stable Release!"
