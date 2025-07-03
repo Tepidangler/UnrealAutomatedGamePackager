@@ -1,159 +1,131 @@
 #!/usr/bin/env python3
+from pathlib import Path
+from typing import (Iterable, Never)
+import argparse
 import os
+import re
 import subprocess
 import sys
 import platform
 
+detected_platform = platform.system().upper()
+cwd = Path.cwd()
+is_win = is_osx = is_linux = False
+is_win = "WINDOWS" in detected_platform
+is_osx = "DARWIN" in detected_platform
+MIN_UE_VERSION = 4.0
+MAX_UE_VERSION = 6.0
+
+if is_osx:
+    DEFAULT_EPIC_PATH_STR = "/Users/Shared/Epic Games"
+else:
+    DEFAULT_EPIC_PATH_STR = "C:\\Program Files\\Epic Games"
+parser = argparse.ArgumentParser()
+parser.add_argument('-e',
+                    '--epic-path',
+                    default=DEFAULT_EPIC_PATH_STR)
+parser.add_argument('-V',
+                    '--ue-version')
+parser.add_argument('uproject_path')
+parser.add_argument('levels_path')
+args = parser.parse_args()
+
 #iterate through levels
-def iterateLevels(LevelPath):
-    lvllst = []
+def get_level_names(levels_path: Path) -> Iterable:
+    filtered_list = [f.stem for f in levels_path.iterdir() \
+        if not f.name.lower().endswith("uasset") \
+        and not f.is_dir()]
+    return filtered_list
 
-    for r, d, f in os.walk(LevelPath):
-        for file in range (len(f)):
-            if not f[file].lower().endswith((".uasset")):
-                   lvllst.append(f[file].rsplit(".", 1)[0])
-    return lvllst
+def run_build_for_levels(bin_path: Path, project_path: Path, level_names: list) -> Never:
+    for level_name in level_names:
+        print(f"Rebuilding {level_name} map")
+        level_path = f"{project_path}{level_name}"
+        subprocess.run([
+            f"{project_path}{level_name}",
+            f"-AutomatedMapBuild CLDesc=\"Rebuilding {level_name} map\" UseSCC=true",
+            ],
+            -1,
+            bin_path
+        )
 
-def BuildAllLevels(Path : str, ProjectPath : str, LvlNames : list):
-        #run UE Command to Build Lighting
-    for f in range(0, len(LvlNames)):
-        print('Rebuilding '+LvlNames[f]+' map')
-        subprocess.run([ProjectPath + LvlNames[f], '-AutomatedMapBuild CLDesc="Rebuilding '+LvlNames[f]+' map" UseSCC=true'],-1,Path )
-       
-def PackageGame(Path : str, ProjectPath :str):
-    PackageDir = None    
-    SplitPath = ProjectPath.split("\\")
-    ProjName = SplitPath[len(SplitPath) - 1]
-    ProjectParent = ProjectPath.split(ProjName)
-    ProjectParent = ProjectParent[0]
-    ProjectParent = ProjectParent.replace('"', "")
-    if not os.path.exists(ProjectParent+"\\PackagedGame"):
-        os.makedirs('{}'.format(ProjectParent+"\\PackagedGame"))
-    PackageDir = ProjectParent + "\\PackagedGame"
-    ProjName = ProjName.replace('.uproject"', "")
-    print("Packaging", ProjName)
-    print(Path, "BuildCookRun", "-project="+ProjectPath, "-platform=Win64", "-clientconfig=Shipping")
-    subprocess.run([Path, "BuildCookRun", "-project="+ProjectPath, "-Platform=Win64", "-clientconfig=Shipping", "-stage", "-pak", "-build=True", "-cook", "-nodebuginfo","-package", "-distribution", "-stagingdirectory="+PackageDir])
+def package_game(build_tool: Path, project_path: Path) -> Never:
+    project = {
+        "name": project_path.resolve().stem,
+        "parent": project_path.resolve().parents[0]
+    }
+    packaged_game_dir = project["parent"].joinpath("PackagedGame")
+    if not packaged_game_dir.exists():
+        packaged_game_dir.mkdir()
+    
+    print(f"Packaging {project['name']}")
+    print(f"{project_path}/{project['name']}.uproject")
+    subprocess.run([build_tool,
+                    "BuildCookRun",
+                    f"-project={project_path}",
+#                    "-compile",
+                    "-targetplatform=Win64",
+                    "-clientconfig=Shipping",
+                    "-stage",
+                    "-pak",
+                    "-build=True",
+                    "-cook",
+                    "-nodebuginfo",
+                    "-package",
+                    "-distribution",
+                    f"-stagingdirectory={packaged_game_dir}"],
+                    cwd=build_tool.joinpath('../../').resolve())
 
-#main
-def main():
+def main() -> Never:
+    automation_tool = ""
+    automation_tool_ext = ".bat" if is_win else ".sh"
+    editor_names = {
+        "UE4": "UE4Editor",
+        "UE5": "UnrealEditor",
+    }
 
-    result = []
-    AutomationToolExe = None
-    DetectedPlatform = platform.system()
-    if len(sys.argv) != 3:
-        print('help: python PackageGame.py  UE/Project/Path Path/To/Maps\n')
-        print(r'Ex: python PackageGame.py "D:\path\to\uproject.uproject" "D:\path\to\maps"')
+    if len(sys.argv) < 3:
+        print('help: python PackageGame.py [-e UE/] UE/Project/Path Path/To/Maps\n')
+        print(r'Ex: python PackageGame.py [-e UE/] "D:\path\to\uproject.uproject" "D:\path\to\maps"')
         exit()
 
-    print("Which version of Unreal Engine does this project use?")
-    print("ex. 5.0")
-    UEVersion = input("> ")
-    UserInput = UEVersion.split(".")
-    if(len(UserInput) > 2):
-        UEVersion = str(UserInput[0]+ "."+UserInput[1])
-        print(UEVersion)
-
-    #Windows
-    if(DetectedPlatform.__contains__("Windows")):
-        if  UEVersion.__contains__("4."):
-            exepath = "C:\\Program Files\\Epic Games\\UE_{}\\Engine\\Binaries\\Win64"
-            print("Searching For UE4 Executable")
-            for r,d,f in os.walk(exepath):
-                if "UE4Editor.exe" in f:
-                 print("UE4 Result Found")
-                 result.append(os.path.join(r, "UE4Editor.exe"))
-                 UEPath = result[0]
-                 AutomationToolExe = "C:\\Program Files\\Epic Games\\UE_{}\\Engine\\Build\\BatchFiles\\RunUAT".format(UEVersion)
-                 break
-        elif  UEVersion.__contains__("5."):
-            print("Searching For UE5 Executable")
-            exepath = "C:\\Program Files\\Epic Games\\UE_{}\\Engine\\Binaries\\Win64".format(UEVersion)
-            for r,d,f in os.walk(exepath):
-                if "UnrealEditor.exe" in f:
-                 print("UE5 Result Found")
-
-                 result.append(os.path.join(r, "UnrealEditor.exe"))
-                 UEPath = result[0]
-                 AutomationToolExe = "C:\\Program Files\\Epic Games\\UE_{}\\Engine\\Build\\BatchFiles\\RunUAT".format(UEVersion)
-                 break
-        else:
-            print("\nThis program only works with UE4 or UE5\n Now Exiting!")
-            exit()
-        AutomationToolExe = AutomationToolExe + ".bat"
-    #MacOS
-    elif (DetectedPlatform.__contains__("Darwin")): #Whatever MacOS is here
-        if  UEVersion.__contains__("4."):
-            exepath = "/Users/Shared/Epic Games/UE_{}/Engine/Binaries/Mac/".format(UEVersion)
-            print("Searching For UE4 Executable")
-            for r,d,f in os.walk(exepath):
-                if "UE4Editor" in f:
-                 print("UE4 Result Found")
-                 result.append(os.path.join(r, "UE4Editor"))
-                 UEPath = result[0]
-                 AutomationToolExe = "/Users/Shared/Epic Games/UE_{}/Engine/build/batchfiles/RunUAT".format(UEVersion)
-                 break
-        elif  UEVersion.__contains__("5."):
-            print("Searching For UE5 Executable")
-            exepath = "/Users/Shared/Epic Games/UE_{}/Engine/Binaries/Mac/".format(UEVersion)
-            for r,d,f in os.walk(exepath):
-                if "UnrealEditor" in f:
-                 print("UE5 Result Found")
-
-                 result.append(os.path.join(r, "UnrealEditor"))
-                 UEPath = result[0]
-                 AutomationToolExe = "/Users/Shared/Epic Games/UE_{}/Engine/build/batchfiles/RunUAT".format(UEVersion)
-                 break
-        else:
-            print("\nThis program only works with UE4 or UE5\n Now Exiting!")
-            exit()
-        AutomationToolExe = AutomationToolExe + ".sh"
-    ##Some flavour of Linux
-    #elif(DetectedPlatform.__contains__("Linux")): #Whatever Unix is here
-    #    if  UEVersion.__contains__("4."):
-    #        exepath = "~/Unreal Engine/UE_{}/Engine/Binaries/Win64"
-    #        print("Searching For UE4 Executable")
-    #        for r,d,f in os.walk(exepath):
-    #            if "UE4Editor.exe" in f:
-    #             print("UE4 Result Found")
-    #             result.append(os.path.join(r, "UE4Editor.exe"))
-    #             UEPath = result[0]
-    #             AutomationToolExe = "C:\\Program Files\\Epic Games\\UE_{}\\Engine\\Build\\BatchFiles\\RunUAT"
-    #             break
-    #    elif  UEVersion.__contains__("5."):
-    #        print("Searching For UE5 Executable")
-    #        exepath = "C:\\Program Files\\Epic Games\\UE_{}\\Engine\\Binaries\\Win64".format(UEVersion)
-    #        for r,d,f in os.walk(exepath):
-    #            if "UnrealEditor.exe" in f:
-    #             print("UE5 Result Found")
-    #             result.append(os.path.join(r, "UnrealEditor.exe"))
-    #             UEPath = result[0]
-    #             AutomationToolExe = "C:\\Program Files\\Epic Games\\UE_{}\\Engine\\Build\\BatchFiles\\RunUAT".format(UEVersion)
-    #             break
-    #    else:
-    #        print("Current Platform not supported by this build tool!")
-    #        exit()
-    #    AutomationToolExe = AutomationToolExe + ".sh"
+    ver_pattern = re.compile("\d.\d{1,2}")
+    ue_version = ""
+    if args.ue_version and ver_pattern.search(args.ue_version) is not None:
+        ue_version = args.ue_version
     else:
-        print("Current Platform not supported by this build tool!")
+        print("Which version of Unreal Engine does this project use?")
+        print("ex. 5.0")
+        ue_version = input("> ").strip()
+        if "." not in ue_version:
+            ue_version += ".0"
+
+    if float(ue_version) < MIN_UE_VERSION and float(ue_version) >= MAX_UE_VERSION:
+        print("\nThis program only works with UE4 or UE5\n Now Exiting!")
         exit()
-   
 
+    editor = editor_names[f"UE{ue_version.split('.')[0]}"]
 
+    ue_path = Path(args.epic_path).joinpath(f"UE_{ue_version}/Engine").resolve()
+    bin_path = ""
+    try:
+        if is_osx:
+            bin_path = list(ue_path.joinpath("Binaries/Mac/").glob(f"{editor}"))[0]
+        else:
+            bin_path = list(ue_path.joinpath("Binaries/Win64/").glob(f"{editor}.exe"))[0]
+        bin_path = bin_path.resolve()
+    except IndexError:
+        print("Could not find Unreal Editor executable.")
+        exit()
+    print(f"Unreal Engine {ue_version} editor found.")
+    automation_tool = ue_path.joinpath(f"Build/BatchFiles/RunUAT{automation_tool_ext}")
 
-    
+    ue_project_path = Path(args.uproject_path).resolve()
+    levels_path = Path(args.levels_path).resolve()
+    level_names = get_level_names(levels_path)
 
-    UEProjectPath = '"' + sys.argv[1] + '"'
-    LevelsPath = sys.argv[2]
-    LevelNames = iterateLevels(LevelsPath)
-    
-    BuildAllLevels(UEPath, UEProjectPath, LevelNames)
-    PackageGame(AutomationToolExe, UEProjectPath)
+    run_build_for_levels(bin_path, ue_project_path, level_names)
+    package_game(automation_tool, ue_project_path)
 
-
-
-
-
-#run main
-
-main()
+if __name__ == "__main__":
+    main()
